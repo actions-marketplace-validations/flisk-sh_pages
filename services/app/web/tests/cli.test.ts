@@ -17,13 +17,17 @@ import {
 	publishFromActions,
 	readFolder,
 	removeAnon,
+	removeFromActions,
 	savedSpace,
 	saveSpace,
 	slugify,
 	sourceOf,
 	stage,
 	storePath,
+	versionsOf,
+	waitCommitted,
 	waitLive,
+	waitVersion,
 } from "../../../../bin/lib.mjs";
 
 const CLI = join(import.meta.dir, "..", "..", "..", "..", "bin", "pages.mjs");
@@ -360,5 +364,97 @@ describe("publishing from GitHub Actions", () => {
 		await expect(
 			publishFromActions("https://publish.test", "bench", tmp(), {}),
 		).rejects.toThrow("id-token: write");
+	});
+});
+
+describe("waiting for a new version and removing from GitHub Actions", () => {
+	it("waits until spaces.json shows more versions than before", async () => {
+		let calls = 0;
+		const fetcher = (async (url: string) => {
+			expect(url).toStartWith("https://pages.test/spaces.json?t=");
+			calls++;
+			return Response.json([
+				{ handle: "org", slug: "bench", versions: calls < 3 ? 2 : 3 },
+			]);
+		}) as unknown as typeof fetch;
+		expect(
+			await versionsOf("https://pages.test/", "org", "other", fetcher),
+		).toBe(0);
+		calls = 0;
+		expect(
+			await waitVersion("https://pages.test/", "org", "bench", 2, {
+				every: 0,
+				fetcher,
+			}),
+		).toBe(true);
+		expect(calls).toBe(3);
+		expect(
+			await waitVersion("https://pages.test/", "org", "bench", 9, {
+				seconds: 0,
+				every: 0,
+				fetcher,
+			}),
+		).toBe(false);
+	});
+
+	it("sends DELETE with the job's OIDC token", async () => {
+		const calls: { url: string; init?: RequestInit }[] = [];
+		const fetcher = (async (url: string, init?: RequestInit) => {
+			calls.push({ url, init });
+			if (url.startsWith("https://actions.test"))
+				return Response.json({ value: "jwt" });
+			return Response.json(
+				{ url: "https://pages.test/@org/bench/" },
+				{ status: 202 },
+			);
+		}) as unknown as typeof fetch;
+		const out = await removeFromActions(
+			"https://publish.test",
+			"bench",
+			{
+				ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.test/t?x=1",
+				ACTIONS_ID_TOKEN_REQUEST_TOKEN: "r",
+			},
+			fetcher,
+		);
+		expect(out.url).toBe("https://pages.test/@org/bench/");
+		expect(calls[1].url).toBe("https://publish.test/v1/ci/spaces/bench");
+		expect(calls[1].init?.method).toBe("DELETE");
+	});
+});
+
+describe("waiting for this run's version to be committed", () => {
+	it("waits until the space's head came from this run", async () => {
+		let n = 0;
+		const fetcher = (async (url: string) => {
+			expect(url).toBe("https://publish.test/v1/spaces/org/bench/head");
+			n++;
+			return Response.json({
+				sha: "x",
+				source:
+					n < 3
+						? "https://github.com/org/r/actions/runs/1"
+						: "https://github.com/org/r/actions/runs/2",
+			});
+		}) as unknown as typeof fetch;
+		expect(
+			await waitCommitted(
+				"https://publish.test",
+				"org",
+				"bench",
+				"https://github.com/org/r/actions/runs/2",
+				{ every: 0, fetcher },
+			),
+		).toBe(true);
+		expect(n).toBe(3);
+		expect(
+			await waitCommitted(
+				"https://publish.test",
+				"org",
+				"bench",
+				"https://github.com/org/r/actions/runs/9",
+				{ seconds: 0, every: 0, fetcher },
+			),
+		).toBe(false);
 	});
 });

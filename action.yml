@@ -10,7 +10,7 @@ inputs:
     description: "The page: a folder with an index.html or index.md, or one .html or .md file, relative to the workspace. Run actions/checkout first."
     required: true
   command:
-    description: "check (default) runs the same rules as the publish and sends nothing. publish also puts the page on pages.flisk.si/@<repository owner>/<slug>/ (the job needs permissions: id-token: write)."
+    description: "check (default) runs the same rules as the publish and sends nothing. publish also puts the page on pages.flisk.si/@<repository owner>/<slug>/ (the job needs permissions: id-token: write). remove takes /@<repository owner>/<slug>/ down (needs slug)."
     required: false
     default: "check"
   slug:
@@ -41,7 +41,7 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.node-version }}
 
@@ -58,30 +58,44 @@ runs:
         # The CLI runs from this action's own checkout, so it is the version you pinned and needs no install.
         cli="${GITHUB_ACTION_PATH}/bin/pages.mjs"
         target="${GITHUB_WORKSPACE}/${PG_PATH}"
-        case "$PG_COMMAND" in check|publish) ;; *) echo "::error::command is check or publish."; exit 2 ;; esac
+        case "$PG_COMMAND" in check|publish|remove) ;; *) echo "::error::command is check, publish or remove."; exit 2 ;; esac
+
+        if [ "$PG_COMMAND" = "remove" ]; then
+          [ -n "$PG_SLUG" ] || { echo "::error::remove needs the slug of the page to take down."; exit 2; }
+          rm_args=(remove "$PG_SLUG" --oidc)
+          [ "$PG_WAIT" = "true" ] && rm_args+=(--wait)
+          node "$cli" "${rm_args[@]}"
+          code=$?
+          echo "ok=$([ "$code" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          exit "$code"
+        fi
 
         out="${RUNNER_TEMP}/pages-check.txt"
-        node "$cli" check "$target" > "$out" 2>&1
-        code=$?
-        cat "$out"
-        {
-          if [ "$code" -eq 0 ]; then echo "### Pages check: passed"; else echo "### Pages check: problems to fix"; fi
-          echo
-          echo '```'
-          cat "$out"
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
+        summary() {
+          {
+            if [ "$code" -eq 0 ]; then echo "### Pages $PG_COMMAND: passed"; else echo "### Pages $PG_COMMAND: problems to fix"; fi
+            echo
+            echo '```'
+            cat "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        }
 
-        if [ "$code" -eq 0 ] && [ "$PG_COMMAND" = "publish" ]; then
+        if [ "$PG_COMMAND" = "check" ]; then
+          node "$cli" check "$target" 2>&1 | tee "$out"
+          code=${PIPESTATUS[0]}
+          summary
+        else
+          # publish runs the same check before it sends anything.
           args=(publish "$target")
           [ -n "$PG_SLUG" ] && args+=(--slug "$PG_SLUG")
           [ "$PG_WAIT" = "true" ] && args+=(--wait)
           # No token: the job's own OIDC token says which repository this is, so nobody sets up a secret.
           [ -z "$GH_TOKEN" ] && args+=(--oidc)
-          pub="${RUNNER_TEMP}/pages-publish.txt"
-          node "$cli" "${args[@]}" 2>&1 | tee "$pub"
+          node "$cli" "${args[@]}" 2>&1 | tee "$out"
           code=${PIPESTATUS[0]}
-          url=$(grep -oE 'https://pages\.flisk\.si/@[a-z0-9-]+/[a-z0-9-]+/' "$pub" | head -1)
+          summary
+          url=$(grep -oE 'https://pages\.flisk\.si/@[a-z0-9-]+/[a-z0-9-]+/' "$out" | head -1)
           echo "url=$url" >> "$GITHUB_OUTPUT"
           if [ "$code" -eq 0 ] && [ -n "$url" ]; then
             { echo; echo "### Published: $url"; } >> "$GITHUB_STEP_SUMMARY"

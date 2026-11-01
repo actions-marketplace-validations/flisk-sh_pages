@@ -124,3 +124,49 @@ describe("publishing from GitHub Actions", () => {
 		}
 	});
 });
+
+describe("taking down a page from GitHub Actions", () => {
+	const del = (auth, slug = "bench") =>
+		new Request(`https://publish.test/v1/ci/spaces/${slug}`, { method: "DELETE", headers: { authorization: `Bearer ${auth}` } });
+
+	it("dispatches the removal of the owner's space and nobody else's", async () => {
+		const gh = github();
+		const res = await handle(del(await token()), env, gh.fetcher);
+		expect(res.status).toBe(202);
+		expect((await res.json()).url).toBe("https://pages.test/@some-org/bench/");
+		expect(gh.sent).toEqual([
+			{
+				url: "https://api.github.com/repos/flisk-sh/pages/dispatches",
+				body: {
+					event_type: "pages-anon",
+					client_payload: { op: "ci-remove", owner: "some-org", slug: "bench", source: "https://github.com/Some-Org/tool/actions/runs/123" },
+				},
+			},
+		]);
+	});
+
+	it("refuses without a valid token or with a bad slug", async () => {
+		const gh = github();
+		expect((await handle(del("nope"), env, gh.fetcher)).status).toBe(401);
+		expect((await handle(del(await token(), "..%2Fmain"), env, gh.fetcher)).status).toBe(404);
+		expect((await handle(del(await token({ repository_owner: "anon" })), env, gh.fetcher)).status).toBe(403);
+		expect(gh.sent).toHaveLength(0);
+	});
+});
+
+describe("a space's newest version", () => {
+	const get = (path) => new Request(`https://publish.test${path}`);
+	it("answers the branch head's sha and the run it came from", async () => {
+		const fetcher = async (url) => {
+			expect(url).toBe("https://api.github.com/repos/flisk-sh/pages/commits/space/some-org/bench");
+			return Response.json({ sha: "b".repeat(40), commit: { message: "Update @some-org/bench\n\nSource: https://github.com/Some-Org/tool/actions/runs/9", committer: { date: "2026-11-01T13:00:00Z" } } });
+		};
+		const res = await handle(get("/v1/spaces/some-org/bench/head"), env, fetcher);
+		expect(await res.json()).toEqual({ sha: "b".repeat(40), source: "https://github.com/Some-Org/tool/actions/runs/9", date: "2026-11-01T13:00:00Z" });
+	});
+	it("answers null for a space that is not there, and 404 for a bad name", async () => {
+		const res = await handle(get("/v1/spaces/some-org/none/head"), env, async () => new Response("{}", { status: 404 }));
+		expect(await res.json()).toEqual({ sha: null });
+		expect((await handle(get("/v1/spaces/Bad_Name/x/head"), env, async () => Response.json({}))).status).toBe(404);
+	});
+});

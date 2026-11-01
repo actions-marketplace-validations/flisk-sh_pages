@@ -4,7 +4,7 @@
 //
 //   pages check <path>                                    the same check the publish runs, nothing sent
 //   pages publish <path> [--slug name] [--wait] [--anon] [--oidc] [--dry-run]
-//   pages remove <slug | path>                            take one of your spaces down
+//   pages remove <slug | path> [--oidc]                   take one of your spaces down
 //   pages whoami                                          the login your spaces go under
 //
 // <path> is a folder with an index.html or index.md, or a single .html or .md file, which becomes the index.
@@ -33,6 +33,10 @@ import {
 	formatReport,
 	publishAnon,
 	publishFromActions,
+	removeFromActions,
+	versionsOf,
+	waitCommitted,
+	waitVersion,
 	removeAnon,
 	saveSpace,
 	savedSpace,
@@ -160,6 +164,7 @@ async function publishWithOidc(src, slugArg, wait) {
 	const owner = (process.env.GITHUB_REPOSITORY_OWNER || "<repository owner>").toLowerCase();
 	if (DRY)
 		return console.log(`\nDry run, nothing sent. A publish would send this page to ${API} with this job's OIDC token,\nand the space would go live at ${SITE}@${owner}/${slug}/`);
+	const before = await versionsOf(SITE, owner, slug);
 	const staged = stage(src);
 	let sent;
 	try {
@@ -170,8 +175,17 @@ async function publishWithOidc(src, slugArg, wait) {
 		rmSync(staged, { recursive: true, force: true });
 	}
 	console.log(`\n✓ Sent from GitHub Actions: ${sent.url}\nThe check and the commit run at ${sent.runs}`);
-	if (wait) await live(sent.url);
-	else console.log("It is live in a minute or two; --wait waits until it is.");
+	if (!wait) return console.log("It is live in a minute or two; --wait waits until it is.");
+	// First the real answer: publish.flisk.si checked this run's page again and committed it.
+	const run = `${process.env.GITHUB_SERVER_URL || "https://github.com"}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+	console.log("\nWaiting for the check and the commit…");
+	if (!(await waitCommitted(API, owner, slug, run)))
+		die(`✗ Not committed after ten minutes: the check on publish.flisk.si refused it, or a newer run of the same page replaced it. See ${sent.runs}`);
+	console.log(`✓ Checked and committed as version ${before + 1}`);
+	// Then the deploy, which is one queue for the whole site: when it is slow the page is still on its way.
+	console.log("Waiting for it to be live…");
+	if (await waitVersion(SITE, owner, slug, before, { seconds: 600 })) console.log(`✓ Live now: ${sent.url} (version ${before + 1})`);
+	else console.log(`::warning::Committed, but the site's deploy queue has not reached it after ten minutes; ${sent.url} shows version ${before + 1} when it does.`);
 }
 
 async function publishAnonymously(path, src, slugArg, wait) {
@@ -223,7 +237,25 @@ async function waitFor(pr) {
 	return false;
 }
 
-async function remove(arg) {
+async function remove(arg, oidc) {
+	if (oidc) {
+		if (!validId("ci", arg)) die(`"${arg}" is not a space name.`);
+		if (DRY) return console.log(`Dry run, nothing sent. Would take down ${SITE}@<repository owner>/${arg}/ with this job's OIDC token.`);
+		try {
+			const { url } = await removeFromActions(API, arg);
+			if (!process.argv.includes("--wait")) return console.log(`Sent: ${url} is gone after the next deploy, in a minute or two.`);
+			const owner = (process.env.GITHUB_REPOSITORY_OWNER || "").toLowerCase();
+			console.log(`Sent. Waiting for ${url} to be gone…`);
+			const until = Date.now() + 300_000;
+			while ((await versionsOf(SITE, owner, arg)) > 0) {
+				if (Date.now() > until) die(`Still live after five minutes; see https://github.com/${REPO}/actions/workflows/publish-anon.yml`);
+				await new Promise((r) => setTimeout(r, 5000));
+			}
+			return console.log(`✓ Removed: ${url}`);
+		} catch (e) {
+			die(`✗ ${e.message}`);
+		}
+	}
 	const saved = existsSync(arg) ? savedSpace(arg) : undefined;
 	if (saved) {
 		if (DRY) return console.log(`Dry run, nothing sent. Would take down ${saved.url}`);
@@ -246,10 +278,10 @@ const [cmd, arg] = process.argv.slice(2);
 if (cmd === "check" && arg) process.exit(check(source(arg)) ? 0 : 1);
 else if (cmd === "publish" && arg)
 	await publish(arg, flag("slug"), process.argv.includes("--wait"), process.argv.includes("--anon"), process.argv.includes("--oidc"));
-else if (cmd === "remove" && arg) await remove(arg);
+else if (cmd === "remove" && arg) await remove(arg, process.argv.includes("--oidc"));
 else if (cmd === "whoami") console.log(login().toLowerCase());
 else
 	die(
-		"usage:\n  pages check <path>\n  pages publish <path> [--slug name] [--wait] [--anon] [--oidc] [--dry-run]\n  pages remove <slug | path>\n  pages whoami\n\n<path> is a folder with an index.html or index.md, or one .html or .md file.",
+		"usage:\n  pages check <path>\n  pages publish <path> [--slug name] [--wait] [--anon] [--oidc] [--dry-run]\n  pages remove <slug | path> [--oidc]\n  pages whoami\n\n<path> is a folder with an index.html or index.md, or one .html or .md file.",
 		2,
 	);
