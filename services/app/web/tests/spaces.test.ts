@@ -1,9 +1,17 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApp } from "../src/app";
 import { csp } from "../src/check.mjs";
 import { SHOWCASE_MAX, showcase } from "../src/pages";
-import { preparePage, readSpaces, type Space } from "../src/spaces";
+import {
+	bar,
+	isSharedShell,
+	originOf,
+	preparePage,
+	readSpaces,
+	type Space,
+} from "../src/spaces";
 
 const skipped: string[] = [];
 const spaces = readSpaces(
@@ -24,6 +32,7 @@ describe("readSpaces", () => {
 	it("reads title and description from the page or the Markdown, newest first", () => {
 		expect(spaces.map((s) => `${s.handle}/${s.slug}`)).toEqual([
 			"sam/gpu-explainer",
+			"sam/for-bob",
 			"sam/notes",
 		]);
 		expect(spaces[0]).toMatchObject({
@@ -32,8 +41,9 @@ describe("readSpaces", () => {
 			versions: 3,
 		});
 		expect(spaces[0].description).toStartWith("Thousands of small cores");
-		expect(spaces[1]).toMatchObject({ kind: "md", title: "Launch notes" });
-		expect(spaces[1].description).toBe(
+		const notes = spaces.find((s) => s.slug === "notes");
+		expect(notes).toMatchObject({ kind: "md", title: "Launch notes" });
+		expect(notes?.description).toBe(
 			"What we learned shipping Pages in a week.",
 		);
 	});
@@ -111,6 +121,16 @@ describe("a published Markdown page", () => {
 		expect(html).not.toContain("<script>alert(1)</script>");
 		expect(html).toContain('src="https://pages.test/@sam/notes/chart.svg"');
 		expect(html).toContain('http-equiv="Content-Security-Policy"');
+	});
+
+	it("links its relative pages on this site, not to GitHub", async () => {
+		const html = await (await get("/@sam/notes/")).text();
+		expect(html).toContain('href="https://pages.test/@sam/notes/report.html"');
+		expect(html).toContain('href="https://pages.test/@sam/gpu-explainer/"');
+		expect(html).not.toMatch(/href="https:\/\/github\.com\/[^"]*\/blob\//);
+		const linked = await get("/@sam/notes/report.html");
+		expect(linked.status).toBe(200);
+		expect(await linked.text()).toContain("data-pages-bar");
 	});
 });
 
@@ -196,5 +216,80 @@ describe("the home page showcase", () => {
 		expect(out).toHaveLength(SHOWCASE_MAX);
 		expect(SHOWCASE_MAX).toBe(9);
 		expect(out[0].slug).toBe("p0");
+	});
+});
+
+describe("the bar's source link", () => {
+	const run =
+		"https://github.com/jawah/charset_normalizer/actions/runs/41311328873";
+	it("reads only a GitHub Actions run from the Source: trailer", () => {
+		expect(originOf(`Update @a/b\n\nSource: ${run}\n`)).toBe(run);
+		expect(
+			originOf("Update @a/b\n\nSource: https://evil.example/actions/runs/1"),
+		).toBeUndefined();
+		expect(originOf(`Source: ${run}/../../x`)).toBeUndefined();
+		expect(originOf("Update @a/b")).toBeUndefined();
+	});
+	it("has a share by email link and a private sharing link", () => {
+		const html = bar("https://pages.test", spaces[0] as Space);
+		expect(html).toContain('href="https://pages.test/share"');
+		expect(html).not.toContain("mailto:");
+		expect(html).not.toContain("mail.google.com");
+		expect(html).toContain(
+			"navigator.clipboard.writeText(location.href.split('#')[0])",
+		);
+		expect(html).toContain("share-only-the-people-you-name");
+		expect(html).toContain("data-tip=");
+		expect(html).toContain("[data-tip]:hover::after");
+	});
+	it("opens the publishing run, or the files when there is none", () => {
+		const s = { ...(spaces[0] as Space), origin: run };
+		expect(bar("https://pages.test", s)).toContain(
+			`href="${run}" data-tip="The CI run that published this page">source`,
+		);
+		expect(bar("https://pages.test", spaces[0] as Space)).toContain(
+			"tree/space/sam/gpu-explainer",
+		);
+	});
+});
+
+describe("bar visibility badge", () => {
+	it("says public for a normal page and private for a locked one", () => {
+		const pub = bar("https://pages.test", spaces[0] as Space);
+		expect(pub).toContain("Public: anyone with the link");
+		const locked = spaces.find((s) => s.slug === "for-bob") as Space;
+		expect(locked.locked).toBe(true);
+		expect(bar("https://pages.test", locked)).toContain(
+			"Private: only people with their own link",
+		);
+	});
+});
+
+describe("shared pages", () => {
+	it("open by their link but are in no list, spaces.json or sitemap", async () => {
+		const shared = spaces.find((s) => s.slug === "for-bob");
+		expect(shared?.unlisted).toBe(true);
+		expect((await get("/@sam/for-bob/")).status).toBe(200);
+		expect(await (await get("/")).text()).not.toContain("for-bob");
+		expect(await (await get("/@sam/")).text()).not.toContain("for-bob");
+		expect(await (await get("/spaces.json")).text()).not.toContain("for-bob");
+		expect(await (await get("/sitemap.xml")).text()).not.toContain("for-bob");
+	});
+});
+
+describe("isSharedShell", () => {
+	it("is true for the locked shell and false for a public page that only carries the marker", () => {
+		const fixtures = join(import.meta.dir, "fixtures", "spaces", "sam");
+		expect(isSharedShell(join(fixtures, "for-bob"), "html")).toBe(true);
+		expect(isSharedShell(join(fixtures, "gpu-explainer"), "html")).toBe(false);
+	});
+});
+
+describe("hidden spaces", () => {
+	it("lists the spaces a maintainer hid in src/hidden.json", () => {
+		const hidden = JSON.parse(
+			readFileSync(join(import.meta.dir, "..", "src", "hidden.json"), "utf8"),
+		);
+		expect(hidden).toContain("kburym/flisk-candidate-test");
 	});
 });

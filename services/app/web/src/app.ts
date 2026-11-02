@@ -1,6 +1,7 @@
 // Routes. The same app is the local preview (`flisk up`, `bun run dev`) and the static site: scripts/build.ts asks
 // it for every page and writes the answers to files for GitHub Pages. Spaces are /@<handle>/<slug>/…, served from
 // the folders the build gathered from their branches.
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { Hono } from "hono";
@@ -11,6 +12,7 @@ import {
 	handlePage,
 	homePage,
 	notFoundPage,
+	sharePage,
 	spacesJson,
 } from "./pages";
 import {
@@ -34,6 +36,21 @@ export interface AppOptions {
 
 /** The demo video and its poster and captions (see DEMO in pages.ts). */
 export const STATIC = join(import.meta.dir, "..", "static");
+
+/** The Share page's script: the sealing code and the page code as one module, plus its SHA-384 for the page to pin. */
+const shareBundle = (() => {
+	const seal = readFileSync(join(STATIC, "seal.js"), "utf8");
+	const page = readFileSync(join(STATIC, "share.js"), "utf8").replace(
+		/^import .*\n/m,
+		"",
+	);
+	const body = `${seal}\n${page}`;
+	const digest = createHash("sha384").update(body).digest("base64");
+	// The file name carries the hash, so a cached old copy can never be served for the new page.
+	const path = `/share-${createHash("sha256").update(body).digest("hex").slice(0, 12)}.js`;
+	return { body, path, integrity: `sha384-${digest}` };
+})();
+export const SHARE_JS_PATH = shareBundle.path;
 
 export const TYPES: Record<string, string> = {
 	".html": "text/html; charset=utf-8",
@@ -85,8 +102,11 @@ export function byHandle(spaces: Space[]): Map<string, Space[]> {
 }
 
 export function createApp(options: AppOptions = {}) {
-	const spaces = options.spaces ?? [];
+	const served = options.spaces ?? [];
+	// Shared pages open by their link but are never listed: not on a home page, a handle, spaces.json or the sitemap.
+	const spaces = served.filter((s) => !s.unlisted);
 	const handles = byHandle(spaces);
+	const servedBy = byHandle(served);
 	const lastmod = (options.builtAt ?? new Date()).toISOString().slice(0, 10);
 	const files = loadAssets();
 	const app = new Hono();
@@ -111,6 +131,23 @@ export function createApp(options: AppOptions = {}) {
 	// The site's own pages
 	app.get("/", (c) => c.html(homePage(baseOf(c), spaces)));
 	app.get("/about", (c) => c.html(aboutPage(baseOf(c))));
+	app.get("/share", (c) =>
+		c.html(sharePage(baseOf(c), shareBundle.integrity, shareBundle.path)),
+	);
+	// The share page's two scripts, from static/ (served with the same policy as the rest of the site)
+	// One file for the page's script, with the sealing code inside, so one hash covers everything it runs.
+	app.get(shareBundle.path, (c) =>
+		c.body(shareBundle.body, 200, {
+			"content-type": "text/javascript; charset=utf-8",
+			"cache-control": "public, max-age=604800",
+		}),
+	);
+	app.get("/seal.js", (c) =>
+		c.body(readFileSync(join(STATIC, "seal.js")), 200, {
+			"content-type": "text/javascript; charset=utf-8",
+			"cache-control": "public, max-age=604800",
+		}),
+	);
 	app.get("/404.html", (c) => c.html(notFoundPage(baseOf(c)), 404));
 	app.get("/spaces.json", (c) =>
 		c.body(spacesJson(baseOf(c), spaces), 200, {
@@ -128,7 +165,7 @@ export function createApp(options: AppOptions = {}) {
 	});
 	app.get("/:at{@[a-z0-9-]+}/:slug/*", (c) => {
 		const handle = c.req.param("at").slice(1);
-		const s = handles.get(handle)?.find((x) => x.slug === c.req.param("slug"));
+		const s = servedBy.get(handle)?.find((x) => x.slug === c.req.param("slug"));
 		if (!s) return c.html(notFoundPage(baseOf(c)), 404);
 		const prefix = `/${spacePath(s)}`;
 		if (!c.req.path.startsWith(prefix)) return c.redirect(prefix, 301);

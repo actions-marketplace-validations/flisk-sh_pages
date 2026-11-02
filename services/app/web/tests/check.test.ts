@@ -12,6 +12,7 @@ import {
 	checkSpace,
 	checkText,
 	csp,
+	decodeEntities,
 	formatReport,
 	hostOf,
 	validId,
@@ -326,5 +327,95 @@ describe("the report", () => {
 		expect(out.match(/\[size\]/g)?.length).toBe(4);
 		expect(out.match(/^! p\d\.html/gm)?.length).toBe(3);
 		expect(out).toContain("! …and 7 more [javascript-url] warnings");
+	});
+});
+
+describe("entity-encoded attributes", () => {
+	it("reads them the way a browser does", () => {
+		expect(decodeEntities("pass&#119;ord")).toBe("password");
+		expect(decodeEntities("pass&#x77;ord")).toBe("password");
+		expect(decodeEntities("https&colon;&sol;&sol;evil.example")).toBe(
+			"https://evil.example",
+		);
+		expect(decodeEntities("&unknown; a & b")).toBe("&unknown; a & b");
+	});
+	it("refuses a password field and an off-site form written with entities", () => {
+		const dir = mkdtempSync(join(tmpdir(), "check-"));
+		writeFileSync(
+			join(dir, "index.html"),
+			'<!doctype html><title>t</title><input type=pass&#119;ord><form action="https&colon;//evil.example"></form>',
+		);
+		const rules = checkSpace(dir).errors.map((e) => e.rule);
+		expect(rules).toContain("password");
+		expect(rules).toContain("form-action");
+	});
+});
+
+describe("secrets in a page", () => {
+	// Built from pieces so this file holds no string that looks like a live key.
+	const j = (n: number) => "x".repeat(n);
+	const keys: Record<string, string> = {
+		"a GitHub token": `gh${"p"}_${j(36)}`,
+		"an AWS access key": `AK${"IA"}${"A1".repeat(8)}`,
+		"a private key": `-----BEGIN ${"RSA "}PRIVATE KEY-----`,
+		"a Slack token": `xox${"b"}-${j(12)}-${j(12)}`,
+		"an API key (sk-)": `sk-${j(40)}`,
+		"a live Stripe key": `sk_${"live"}_${j(24)}`,
+		"a Google API key": `AI${"za"}${j(35)}`,
+	};
+	for (const [label, key] of Object.entries(keys)) {
+		it(`refuses ${label}, and shows only its first characters`, () => {
+			const r = checkText("index.html", page(`<p>${key}</p>`));
+			expect(r.ok).toBe(false);
+			const e = r.errors.find((f) => f.rule === "secret");
+			expect(e?.message).toContain(label);
+			expect(e?.message).not.toContain(key);
+			const inFolder = checkSpace(
+				space({ "index.html": page(`<p>${key}</p>`) }),
+			);
+			expect(inFolder.errors.map((f) => f.rule)).toContain("secret");
+		});
+	}
+
+	it("also looks in the other text files of a folder", () => {
+		const r = checkSpace(
+			space({
+				"index.html": page("<p>hi</p>"),
+				"data.json": JSON.stringify({ key: keys["an AWS access key"] }),
+			}),
+		);
+		expect(r.errors.find((f) => f.rule === "secret")?.file).toBe("data.json");
+	});
+
+	const jwt = `eyJ${j(20)}.eyJ${j(20)}.${j(20)}`;
+	it("warns about a JSON Web Token without stopping the publish", () => {
+		const r = checkText(
+			"index.html",
+			page(`<pre>{"accessToken":"${jwt}"}</pre>`),
+		);
+		expect(r.ok).toBe(true);
+		expect(r.warnings.map((w) => w.rule)).toContain("jwt");
+		expect(r.warnings.find((w) => w.rule === "jwt")?.message).not.toContain(
+			jwt,
+		);
+	});
+
+	it("warns that an embedded zip (a Playwright report) was not opened", () => {
+		const zip = `data:application/zip;base64,UEsDB${"A".repeat(5000)}`;
+		const r = checkText(
+			"index.html",
+			page(`<script>window.r="${zip}"</script>`),
+		);
+		expect(r.ok).toBe(true);
+		expect(r.warnings.map((w) => w.rule)).toContain("embedded-zip");
+	});
+
+	it("does not warn about an ordinary page", () => {
+		const r = checkText(
+			"index.html",
+			page("<p>eyJ is not a token, and neither is sk-short</p>"),
+		);
+		expect(r.warnings.map((w) => w.rule)).not.toContain("jwt");
+		expect(r.errors.map((e) => e.rule)).not.toContain("secret");
 	});
 });

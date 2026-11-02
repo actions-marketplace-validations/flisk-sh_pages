@@ -6,6 +6,7 @@ import { checkText, formatReport, LIMITS } from "../../../services/app/web/src/c
 const PROTOCOL = "2025-03-26";
 const SITE = "https://pages.flisk.si/";
 const PUBLISH = "npx -y @flisk-sh/pages publish page.html --wait";
+const SHARE = "npx -y @flisk-sh/pages share page.html --send --to alice --to bob";
 
 export const TOOLS = [
   {
@@ -75,9 +76,14 @@ function howTo() {
       `Put it online: ${PUBLISH}`,
       "The link looks like https://pages.flisk.si/@your-github-name/page-name/ and works for anyone.",
     ],
+    only_certain_people: {
+      command: SHARE,
+      how: "Nothing is hosted: it writes one self-decrypting file per person and prints a passphrase for each. Send the file and the passphrase by different channels. Ask the user for the names; never guess them. (Without --send the page is published locked to a public branch, which is not private.)",
+      limits: "One self-contained .html page. A copy you have sent cannot be taken back, and a recipient can forward the file and passphrase.",
+    },
     needs: "Node.js for npx. For an .html page, the GitHub CLI signed in (gh auth login). A single .md page can go out without signing in.",
     good_to_know: [
-      "It is public: anyone can open the page and read its source.",
+      "It is public: anyone can open the page and read its source. If only certain people should read it, use only_certain_people instead.",
       "Publishing the same name again adds a new version.",
       `Limits: ${LIMITS.files} files, ${LIMITS.fileBytes / 1048576} MB per file, ${LIMITS.totalBytes / 1048576} MB in all.`,
       "Pages cannot ask for passwords, ask for a crypto wallet, or load code from unknown sites.",

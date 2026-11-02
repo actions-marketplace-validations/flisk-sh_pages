@@ -7,12 +7,12 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { createApp } from "../src/app";
+import { createApp, SHARE_JS_PATH } from "../src/app";
 import { validId } from "../src/check.mjs";
 import { DEMO } from "../src/pages";
 import { ICONS } from "../src/seo";
 import { SITE } from "../src/site";
-import { readSpaces, type SpaceGit, spacePath } from "../src/spaces";
+import { originOf, readSpaces, type SpaceGit, spacePath } from "../src/spaces";
 
 const here = join(import.meta.dir, "..");
 const arg = (name: string, fallback: string) => {
@@ -66,6 +66,7 @@ export function gather(): Record<string, SpaceGit> {
 			updated: new Date(updated).toISOString(),
 			versions: Number(git("rev-list", "--count", ref)),
 			approved: /^Pages-Approved-By: \S+/m.test(body),
+			origin: originOf(body),
 		};
 	}
 	writeFileSync(join(SPACES, "git.json"), JSON.stringify(meta, null, 2));
@@ -103,6 +104,10 @@ export async function build(meta: Record<string, SpaceGit>) {
 	const site: [string, string][] = [
 		["/", "index.html"],
 		["/about", "about.html"],
+		["/share", "share.html"],
+		[SHARE_JS_PATH, SHARE_JS_PATH.slice(1)],
+		["/seal.js", "seal.js"],
+
 		["/404.html", "404.html"],
 		["/spaces.json", "spaces.json"],
 		["/robots.txt", "robots.txt"],
@@ -114,7 +119,9 @@ export async function build(meta: Record<string, SpaceGit>) {
 		...Object.values(DEMO).map((n): [string, string] => [`/${n}`, n]),
 	];
 	for (const [path, file] of site) await write(path, file);
-	for (const handle of new Set(spaces.map((s) => s.handle)))
+	for (const handle of new Set(
+		spaces.filter((s) => !s.unlisted).map((s) => s.handle),
+	))
 		await write(`/@${handle}/`, `@${handle}/index.html`);
 	for (const s of spaces) {
 		const prefix = spacePath(s);

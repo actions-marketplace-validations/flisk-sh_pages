@@ -18,6 +18,8 @@ export interface SpaceGit {
 	versions: number;
 	/** A maintainer published it even though the check failed (a Pages-Approved-By trailer). */
 	approved?: boolean;
+	/** The CI run that published it (a Source: trailer on the commit), so "source" can open the publisher's own run. */
+	origin?: string;
 }
 
 export interface Space extends SpaceGit {
@@ -28,6 +30,10 @@ export interface Space extends SpaceGit {
 	kind: "html" | "md";
 	title: string;
 	description: string;
+	/** A shared (locked) page: served by its link, left out of every list, the sitemap and spaces.json. */
+	unlisted: boolean;
+	/** The page is the locked shell `pages share` writes: only people with their own link can read it. */
+	locked: boolean;
 }
 
 export const spacePath = (s: { handle: string; slug: string }) =>
@@ -38,8 +44,18 @@ export const branchOf = (s: { handle: string; slug: string }) =>
 
 const repoUrl = (path: string) => `https://github.com/${SITE.repoSlug}/${path}`;
 
-export const links = (s: { handle: string; slug: string }) => ({
-	source: repoUrl(`tree/${branchOf(s)}`),
+/** The Source: trailer of a publish commit, only when it is a GitHub Actions run (nothing else is linked from the bar). */
+export const originOf = (body: string) =>
+	body.match(
+		/^Source: (https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+)\s*$/m,
+	)?.[1];
+
+export const links = (s: {
+	handle: string;
+	slug: string;
+	origin?: string;
+}) => ({
+	source: s.origin ?? repoUrl(`tree/${branchOf(s)}`),
 	history: repoUrl(`commits/${branchOf(s)}`),
 	report: repoUrl(
 		`issues/new?template=report.yml&title=${encodeURIComponent(`Report: @${s.handle}/${s.slug}`)}`,
@@ -56,6 +72,26 @@ const decode = (s: string) =>
 		.replace(/&quot;/g, '"')
 		.replace(/&#39;/g, "'")
 		.replace(/&amp;/g, "&");
+
+/** Spaces a maintainer keeps off every list (src/hidden.json). They still open by their link. */
+const HIDDEN: string[] = JSON.parse(
+	readFileSync(join(import.meta.dir, "hidden.json"), "utf8"),
+);
+
+/**
+ * Whether a space is the locked shell `pages share` writes: one index.html, marked, and small once its encrypted data
+ * is taken out. Only that is left out of the lists, so a public page cannot hide itself by containing the marker.
+ */
+export function isSharedShell(dir: string, kind: "html" | "md"): boolean {
+	if (kind !== "html" || readdirSync(dir).length !== 1) return false;
+	const html = readFileSync(join(dir, "index.html"), "utf8");
+	if (!html.includes("<body data-pages-shared>")) return false;
+	const rest = html.replace(/const P=\{[\s\S]*?\},C=\{[\s\S]*?\};/, "");
+	return (
+		rest.length < 2500 &&
+		!/<(?:script|iframe|img|link|form)\b[^>]*\b(?:src|href|action)=/i.test(rest)
+	);
+}
 
 /** Title and description: the page's <title> and meta description, or the Markdown's first heading and paragraph. */
 function describe(dir: string, kind: Space["kind"], slug: string) {
@@ -112,6 +148,9 @@ export function readSpaces(
 				...meta,
 				title: clip(title, 90),
 				description: clip(description, 200),
+				unlisted:
+					isSharedShell(dir, kind) || HIDDEN.includes(`${handle}/${slug}`),
+				locked: isSharedShell(dir, kind),
 			});
 		}
 	return out.sort((a, b) => b.updated.localeCompare(a.updated));
@@ -120,8 +159,7 @@ export function readSpaces(
 /** The small bar every space carries: who published it, its source and history, and a way to report it. */
 export function bar(base: string, s: Space): string {
 	const l = links(s);
-	const a = 'style="color:inherit;text-decoration:none"';
-	return `<div data-pages-bar style="position:fixed;right:10px;bottom:10px;z-index:2147483647;display:flex;gap:10px;align-items:center;font:12px/1.2 ui-sans-serif,system-ui,sans-serif;background:#141413;color:#fbfaf7;padding:7px 12px;border-radius:999px;opacity:.9;box-shadow:0 2px 10px rgba(0,0,0,.25)"><a ${a} href="${base}/"><b>pages</b>.flisk.si</a><a ${a} href="${base}/@${s.handle}/">@${esc(s.handle)}</a><a ${a} href="${l.history}">v${s.versions}</a><a ${a} href="${l.source}">source</a><a ${a} href="${l.report}">report</a></div>`;
+	return `<div data-pages-bar><style>[data-pages-bar]{position:fixed;right:12px;bottom:12px;z-index:2147483647;display:flex;align-items:center;font:12px/1 ui-sans-serif,system-ui,sans-serif;background:#fff;color:#1b1b1f;border:1px solid #e4e4ea;border-radius:7px;box-shadow:0 1px 8px rgba(0,0,0,.08);overflow:visible}[data-pages-bar] a,[data-pages-bar] span{position:relative;display:inline-flex;align-items:center;color:#5b5b66;text-decoration:none;padding:6px 9px;border-left:1px solid #e4e4ea}[data-pages-bar] span{gap:5px;padding:6px 9px;color:#1b1b1f;font-weight:600}[data-pages-bar] a:hover,[data-pages-bar] a:focus-visible{background:#f5f6fa;color:#1b1b1f;outline:0}[data-pages-bar] a:last-child:hover{border-radius:0 6px 6px 0}[data-pages-bar] [data-tip]:hover::after,[data-pages-bar] [data-tip]:focus-visible::after{content:attr(data-tip);position:absolute;right:0;bottom:calc(100% + 10px);width:max-content;max-width:250px;white-space:normal;background:#1b1b1f;color:#fff;padding:8px 11px;border-radius:6px;font:12px/1.4 ui-sans-serif,system-ui,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.25);pointer-events:none}[data-pages-bar] [data-share]{position:relative;display:inline-flex}[data-pages-bar] [data-menu]{display:none;position:absolute;right:0;bottom:100%;margin-bottom:6px;flex-direction:column;background:#fff;border:1px solid #e4e4ea;border-radius:7px;box-shadow:0 2px 10px rgba(0,0,0,.12);min-width:120px;overflow:hidden}[data-pages-bar] [data-share]:hover [data-menu],[data-pages-bar] [data-share]:focus-within [data-menu]{display:flex}[data-pages-bar] [data-menu] a{border-left:0;border-top:1px solid #e4e4ea;color:#1b1b1f}[data-pages-bar] [data-menu] a:first-child{border-top:0}@media (prefers-color-scheme:dark){[data-pages-bar] [data-menu]{background:#1c1c24;border-color:#2c2c36}[data-pages-bar] [data-menu] a{border-color:#2c2c36;color:#ececf1}[data-pages-bar]{background:#1c1c24;color:#ececf1;border-color:#2c2c36}[data-pages-bar] a{color:#a4a4b0;border-color:#2c2c36}[data-pages-bar] span{color:#ececf1}[data-pages-bar] a:hover,[data-pages-bar] a:focus-visible{background:#26262f;color:#ececf1}[data-pages-bar] [data-tip]:hover::after,[data-pages-bar] [data-tip]:focus-visible::after{background:#ececf1;color:#14141a}}</style><span data-tip="${s.locked ? "Private: only people with their own link can read this page" : "Public: anyone with the link can read this page"}">${s.locked ? '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>' : '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/></svg>'}${s.locked ? "private" : "public"}</span><a href="${base}/" data-tip="pages.flisk.si: free pages that an agent published. Open the home page"><b>pages</b>.flisk.si</a><a href="${base}/@${s.handle}/" data-tip="Everything @${esc(s.handle)} has published">@${esc(s.handle)}</a><a href="${l.history}" data-tip="Version ${s.versions}. Open the full history of this page on GitHub">v${s.versions}</a><a href="${l.source}" data-tip="${s.origin ? "The CI run that published this page" : "The files of this page: read exactly what it contains"}">source</a><span data-share tabindex="0"><a href="#" data-tip="Share: choose public or private" onclick="return false">share</a><span data-menu><a href="#" data-tip="Anyone with this link can read the page" onclick="event.preventDefault();var t=this;navigator.clipboard&&navigator.clipboard.writeText(location.href.split('#')[0]).then(function(){t.textContent='Copied';setTimeout(function(){t.textContent='Public link'},1500)})">Public link</a><a href="${base}/share" data-tip="Only the people you choose can open it: one file and passphrase each">Private file</a></span></span><a href="https://github.com/flisk-sh/pages#share-only-the-people-you-name" data-tip="Private: how to share a page with only the people you name, one locked link each">private</a><a href="${l.report}" data-tip="Report: tell us this page is abusive, a scam or broken">report</a></div>`;
 }
 
 /**
@@ -180,7 +218,8 @@ blockquote{margin:0;padding:2px 16px;border-left:3px solid var(--line);color:var
 /** An index.md as a page: rendered like a GitHub README (sanitized: no scripts), in a plain reading layout. */
 export function markdownPage(md: string, base: string, s: Space): string {
 	const body = renderMarkdown(md, {
-		baseUrl: `https://github.com/${SITE.repoSlug}/blob/${branchOf(s)}/index.md`,
+		// Relative links stay on the site: a link to report.html opens that file of the space, not its GitHub blob.
+		baseUrl: `${base}/${spacePath(s)}`,
 		imageBaseUrl: `${base}/${spacePath(s)}`,
 	});
 	const html = `<!doctype html><html lang="${SITE.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(s.title)}</title><meta name="description" content="${esc(s.description)}"><meta property="og:title" content="${esc(s.title)}"><meta property="og:description" content="${esc(s.description)}"><meta property="og:image" content="${base}/og.png"><style>${DOC_STYLE}</style></head><body><main>${body}</main></body></html>`;

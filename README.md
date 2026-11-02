@@ -39,6 +39,39 @@ The npm package is released by `.github/workflows/release-cli.yml` when a `cli-v
 Or by hand in the browser: [add a file](https://github.com/flisk-sh/pages/new/main?filename=spaces/YOUR-LOGIN/my-page/index.md)
 at `spaces/<your login>/<name>/index.md` and propose the change. GitHub makes the fork and the pull request for you.
 
+## Private: files that are never hosted
+
+Anything that must really be private should not be published. `--send` writes one self-decrypting file per person.
+Nothing is uploaded to pages.flisk.si, GitHub or any server.
+
+```bash
+npx -y @flisk-sh/pages share interview.html --send --to alice --to bob
+#   alice
+#     file:       pages-private-xxxx/private-ceb1e9a9.html
+#     passphrase: K3G5-JV5T-6Q5F-WYPJ
+```
+
+Send each person their file by email or Signal, and their passphrase by a different channel. They open the file in a
+browser, type the passphrase, and the page appears.
+
+1. The file is AES-256-GCM ciphertext. The key comes from the passphrase (about 80 random bits) through 600,000 rounds
+   of PBKDF2, so the file alone and the passphrase alone are both useless.
+2. The file holds no names. File names are random, and the contents are padded to 64 KB blocks, so size says little.
+3. The passphrases are printed once and not saved anywhere. Lose one, send a new file.
+4. A copy you have sent cannot be taken back, and the recipient can forward both parts. There is no expiry for a sent
+   file; delete your copy and ask them to delete theirs.
+5. One self-contained `.html` page (no Markdown, no extra files).
+
+### Hosted but locked (not private)
+
+`share` without `--send` publishes a locked page to a public git branch. The page is encrypted with a key in the link,
+but its ciphertext, size and history are public and permanent, and a leaked link can never be revoked. Use it for
+convenience only, never for anything sensitive.
+
+```bash
+npx -y @flisk-sh/pages share interview.html --wait   # asks who; one locked link per person
+```
+
 ## GitHub Action
 
 Check a page in CI with the same rules the publish runs, and publish it when you want. The check needs no keys and

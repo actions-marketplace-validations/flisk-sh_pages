@@ -297,6 +297,50 @@ export function aboutPage(base: string): string {
 	);
 }
 
+// The share page runs one same-origin script and nothing else. It is the only page that allows scripts.
+const SHARE_POLICY =
+	"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'";
+
+export function sharePage(
+	base: string,
+	integrity: string,
+	scriptPath: string,
+): string {
+	const page = layout(
+		base,
+		{
+			path: "share",
+			title: "Make a private file",
+			description:
+				"Seal a page into one private file per person, in your browser. Nothing is uploaded.",
+			jsonLd: [],
+			crumbs: [{ name: "Share", path: "share" }],
+		},
+		`<style>
+#f label{display:block;margin:16px 0 0;font-size:1rem}
+#f input,#f textarea{display:block;width:100%;box-sizing:border-box;min-height:44px;margin-top:8px;padding:10px;font:inherit;border:1px solid var(--line2);border-radius:8px;background:var(--card);color:var(--fg)}
+#f textarea{min-height:110px}
+#f button,.card a.btn{display:block;width:100%;box-sizing:border-box;min-height:48px;margin-top:16px;padding:12px;font:inherit;font-weight:600;border:0;border-radius:10px;background:var(--fg);color:var(--bg);text-align:center;text-decoration:none;cursor:pointer}
+.card{border:1px solid var(--line);border-radius:12px;padding:16px;margin:16px 0;background:var(--card)}
+.card .pass{font:600 1.25rem ui-monospace,monospace;letter-spacing:.06em;overflow-wrap:anywhere}
+.card label{display:flex;gap:10px;align-items:flex-start;margin:12px 0;font-size:.95rem}
+.card label input{width:22px;height:22px;min-height:0;margin:2px 0 0;flex:none}
+.card a.btn[aria-disabled="true"]{opacity:.45;pointer-events:none}
+.card button{display:block;width:100%;min-height:48px;margin-top:10px;border-radius:10px;border:1px solid var(--line2);background:var(--card);color:var(--fg);font:inherit;font-weight:600}
+</style>
+<div class="wrap page"><p class="eyebrow">Private</p><h1>Make a private file</h1>
+<p class="lede">Choose a page and the people it is for. Each person gets their own file and passphrase. This runs in your browser: the page is never uploaded, and nothing is stored. Send each file and its passphrase by different channels.</p>
+<form id="f"><label>Page (.html file) <input id="page" type="file" accept=".html,text/html"></label>
+<label>Or paste the page's HTML here (no file needed) <textarea id="paste" rows="6" spellcheck="false" autocapitalize="off"></textarea></label>
+<label>Names (optional, just labels: one per line or separated by commas) <textarea id="names" rows="3" placeholder="e.g. me, or leave empty"></textarea></label>
+<button type="submit">Make private files</button></form>
+<p id="m" role="status"></p><div id="out"></div>
+<p class="muted">Anyone with the file and the passphrase can read the page. Copies you send cannot be taken back. <a href="${SITE.repo}/blob/main/bin/seal.js">Read the sealing code</a>.</p>
+<script type="module" src="${rootOf(base)}${scriptPath}" integrity="${integrity}" crossorigin="anonymous"></script></div>`,
+	);
+	return page.replace(POLICY, SHARE_POLICY);
+}
+
 export function notFoundPage(base: string): string {
 	const root = rootOf(base);
 	return layout(
