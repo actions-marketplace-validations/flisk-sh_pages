@@ -57,6 +57,34 @@ describe("the page bar in a browser", () => {
 		).not.toContain("mailto:");
 	});
 
+	it("stays inside the screen and hides the share tooltip while its menu is open", async () => {
+		const css =
+			(await open("/@sam/gpu-explainer/")).document.querySelector(
+				"[data-pages-bar] style",
+			)?.textContent ?? "";
+		expect(css).toContain("max-width:calc(100vw - 24px)");
+		expect(css).toContain("[data-share]:hover>a::after");
+	});
+
+	it("scopes the locked page's own styles so they never reach the decrypted page", () => {
+		const shell = readFileSync(
+			join(import.meta.dir, "../../../../bin/protect.mjs"),
+			"utf8",
+		);
+		expect(shell).toContain("body[data-pages-shared]{");
+		expect(shell).toContain("#m{");
+		expect(shell).not.toMatch(/[}>]p\{/);
+	});
+
+	it("puts the private notice at the top, away from the bar at the bottom", () => {
+		const shell = readFileSync(
+			join(import.meta.dir, "../../../../bin/protect.mjs"),
+			"utf8",
+		);
+		expect(shell).toContain("document.body.prepend(bar)");
+		expect(shell).not.toContain("bottom:0;");
+	});
+
 	it("copy link writes the page address and says Copied", async () => {
 		const copied: string[] = [];
 		const w = await open("/@sam/gpu-explainer/", "", {
