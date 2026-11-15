@@ -39,6 +39,22 @@ export interface Space extends SpaceGit {
 export const spacePath = (s: { handle: string; slug: string }) =>
 	`@${s.handle}/${s.slug}/`;
 
+/** Sub-pages of a space for the sitemap: `<folder>/index.html` one level down, at most 100, sorted. */
+export const subPages = (s: { dir: string; kind: string }): string[] => {
+	if (s.kind !== "html" || !existsSync(s.dir)) return [];
+	return readdirSync(s.dir, { withFileTypes: true })
+		.filter(
+			(e) =>
+				e.isDirectory() &&
+				!e.name.startsWith(".") &&
+				/^[\w-]+$/.test(e.name) &&
+				existsSync(join(s.dir, e.name, "index.html")),
+		)
+		.map((e) => `${e.name}/`)
+		.sort()
+		.slice(0, 100);
+};
+
 export const branchOf = (s: { handle: string; slug: string }) =>
 	`space/${s.handle}/${s.slug}`;
 
@@ -167,6 +183,26 @@ export function bar(base: string, s: Space): string {
 }
 
 /**
+ * Flisk Analytics for a published page: counts the page and every sub-page like the rest of pages.flisk.si. It loads
+ * only in the top window, so the live previews on the home page do not count as visits. It needs the script and its
+ * beacon host in the page's policy, which `pagePolicy` adds.
+ */
+export const ANALYTICS = `<script>if(self===top){var a=document.createElement("script");a.defer=true;a.dataset.domain="pages.flisk.si";a.src="https://flisk.sh/a.js";document.head.appendChild(a)}</script>`;
+
+/** The page policy, plus the one script and the one beacon host Flisk Analytics needs (never for the one-click spaces). */
+export function pagePolicy(scripts: boolean): string {
+	const policy = csp({ scripts });
+	return scripts
+		? policy
+				.replace("script-src 'self'", "script-src 'self' https://flisk.sh")
+				.replace(
+					"connect-src 'self'",
+					"connect-src 'self' https://analytics.flisk.si",
+				)
+		: policy;
+}
+
+/**
  * One HTML file of a space, ready to serve: the policy and a canonical link go in before anything the page wrote, so
  * they apply to its first script, and the bar goes in at the end of the body.
  */
@@ -182,7 +218,8 @@ export function preparePage(
 		// that. A second charset the page wrote later is ignored.
 		'<meta charset="utf-8">',
 		// One-click spaces come from a visitor with no account: they never run scripts.
-		`<meta http-equiv="Content-Security-Policy" content="${csp({ scripts: s.handle !== "anon" })}">`,
+		`<meta http-equiv="Content-Security-Policy" content="${pagePolicy(s.handle !== "anon")}">`,
+		s.handle !== "anon" ? ANALYTICS : "",
 		'<meta name="referrer" content="strict-origin-when-cross-origin">',
 		/<link[^>]+rel=["']?canonical/i.test(html)
 			? ""

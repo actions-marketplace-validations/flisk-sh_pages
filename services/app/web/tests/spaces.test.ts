@@ -2,12 +2,12 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApp } from "../src/app";
-import { csp } from "../src/check.mjs";
 import { SHOWCASE_MAX, showcase } from "../src/pages";
 import {
 	bar,
 	isSharedShell,
 	originOf,
+	pagePolicy,
 	preparePage,
 	readSpaces,
 	type Space,
@@ -74,7 +74,7 @@ describe("a published HTML page", () => {
 		const policy = html.indexOf('http-equiv="Content-Security-Policy"');
 		expect(policy).toBeGreaterThan(0);
 		expect(policy).toBeLessThan(html.indexOf("<script"));
-		expect(html).toContain(`content="${csp()}"`);
+		expect(html).toContain(`content="${pagePolicy(true)}"`);
 		expect(html).toContain(
 			'<link rel="canonical" href="https://pages.test/@sam/gpu-explainer/">',
 		);
@@ -84,6 +84,29 @@ describe("a published HTML page", () => {
 		);
 		expect(html).toContain("commits/space/sam/gpu-explainer");
 		expect(html).toContain(">v3<");
+	});
+
+	it("counts visits to the page and its sub-pages, but not the previews or the one-click spaces", async () => {
+		const html = await (await get("/@sam/gpu-explainer/")).text();
+		expect(html).toContain('a.src="https://flisk.sh/a.js"');
+		expect(html).toContain("if(self===top)");
+		expect(html).toMatch(
+			/script-src 'self' https:\/\/flisk\.sh 'unsafe-inline'/,
+		);
+		expect(html).toContain("connect-src 'self' https://analytics.flisk.si");
+		const sub = preparePage(
+			"<h1>sub</h1>",
+			"https://pages.test",
+			spaces[0] as Space,
+			"report.html",
+		);
+		expect(sub).toContain("flisk.sh/a.js");
+		const anon = preparePage("<h1>cv</h1>", "https://pages.test", {
+			...(spaces[0] as Space),
+			handle: "anon",
+		});
+		expect(anon).not.toContain("flisk.sh");
+		expect(anon).toContain("script-src 'none'");
 	});
 
 	it("serves the space's other files with their types", async () => {
@@ -147,10 +170,11 @@ describe("the site around the spaces", () => {
 		const html = await (await get("/")).text();
 		expect(html).toContain("How GPUs work");
 		expect(html).toContain("default-src 'none'");
-		expect(html).toContain("script-src https://flisk.si;");
+		expect(html).toContain("script-src https://flisk.si https://flisk.sh;");
+		expect(html).toContain("connect-src https://analytics.flisk.si;");
 		expect(html.match(/<script src/g)).toHaveLength(1);
 		expect(html).toContain(
-			'<script src="https://flisk.si/assets/bar.js" defer></script>',
+			'<script defer data-domain="pages.flisk.si" src="https://flisk.sh/a.js"></script><script src="https://flisk.si/assets/bar.js" defer></script>',
 		);
 	});
 
@@ -266,6 +290,14 @@ describe("bar visibility badge", () => {
 		expect(bar("https://pages.test", locked)).toContain(
 			"Private: only people with their own link",
 		);
+	});
+});
+
+describe("sitemap sub-pages", () => {
+	it("lists a space's <folder>/index.html pages, and never a shared page's", async () => {
+		const xml = await (await get("/sitemap.xml")).text();
+		expect(xml).toContain("https://pages.test/@sam/gpu-explainer/part-two/");
+		expect(xml).not.toContain("for-bob");
 	});
 });
 
